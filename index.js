@@ -164,15 +164,58 @@ const gradients = {
   'flame': 'linear-gradient(135deg, #ff416c, #ff4b2b)'
 };
 
-let browserPromise = (async () => {
-  return puppeteer.launch({
-    args: chromium.args,
-    defaultViewport: chromium.defaultViewport,
-    executablePath: await chromium.executablePath,
-    headless: chromium.headless,
-    ignoreHTTPSErrors: true,
-  });
-})();
+// Replace the browser promise with a singleton pattern
+let browser = null;
+let browserError = null;
+
+// Proper browser management with environment detection
+async function getBrowser() {
+  // Return existing browser instance if available
+  if (browser) return browser;
+  // Throw if we already encountered an error
+  if (browserError) throw browserError;
+  
+  try {
+    // Determine if we're in local or serverless environment
+    const executablePath = await chromium.executablePath;
+    const isLambda = !!process.env.AWS_LAMBDA_FUNCTION_NAME || !!process.env.VERCEL;
+    
+    const launchOptions = {
+      args: chromium.args || [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--no-first-run',
+        '--no-zygote',
+        '--disable-gpu'
+      ],
+      defaultViewport: chromium.defaultViewport || { width: 1400, height: 1400 },
+      executablePath: executablePath,
+      headless: chromium.headless || true,
+      ignoreHTTPSErrors: true
+    };
+
+    // Log launch info for debugging
+    console.log('Launching browser in environment:', isLambda ? 'serverless' : 'local');
+    console.log('Using executable path:', executablePath);
+    
+    browser = await puppeteer.launch(launchOptions);
+    console.log('Browser launched successfully');
+    
+    // Clean up on browser disconnect
+    browser.on('disconnected', () => {
+      console.log('Browser disconnected');
+      browser = null;
+    });
+    
+    return browser;
+  } catch (error) {
+    console.error('Failed to launch browser:', error);
+    browserError = error;
+    throw error;
+  }
+}
 
 app.post('/image', async (req, res) => {
   const { 
@@ -385,39 +428,47 @@ app.post('/image', async (req, res) => {
       </body></html>
     `;
 
-    const browser = await browserPromise;
-    const page = await browser.newPage();
-
-    // LinkedIn recommended image size: 1200x630 (aspect ratio ~1.91:1)
-    await page.setViewport({
-      width: 1400,
-      height: 1400,
-      deviceScaleFactor: 2
-    });
-
-    await page.setContent(html, { waitUntil: 'networkidle0' });
-
-    // Take screenshot of the gradient-wrapper instead of just the container
-    const element = await page.$('.gradient-wrapper');
-    const image = await element.screenshot({
-      omitBackground: false, // Keep background to include the gradient
-      encoding: 'binary'
-    });
-
-    await page.close();
-
-    cache.set(key, image);
-    res.type('png').send(image);
+    try {
+      // Get browser instance with error handling
+      const browser = await getBrowser();
+      const page = await browser.newPage();
+      
+      // LinkedIn recommended image size
+      await page.setViewport({
+        width: 1200,
+        height: 630,
+        deviceScaleFactor: 2
+      });
+      
+      await page.setContent(html, { waitUntil: 'networkidle0' });
+      
+      const element = await page.$('.gradient-wrapper');
+      const image = await element.screenshot({
+        omitBackground: false,
+        encoding: 'binary'
+      });
+      
+      await page.close();
+      
+      cache.set(key, image);
+      res.type('png').send(image);
+    } catch (browserError) {
+      console.error('Browser error:', browserError);
+      res.status(500).json({ 
+        error: 'Image generation failed', 
+        message: 'Browser error: ' + browserError.message 
+      });
+    }
   } catch (err) {
     console.error('Error:', err.message);
     res.status(500).json({ error: 'Image generation failed' });
   }
 });
 
-// Health endpoint and graceful shutdown
+// Update health endpoint and graceful shutdown
 app.get('/health', (_req, res) => res.send('OK'));
 process.on('SIGINT', async () => {
-  (await browserPromise).close();
+  if (browser) await browser.close();
   process.exit();
 });
 
