@@ -1,6 +1,4 @@
 const express = require('express');
-const puppeteer = require('puppeteer-core');
-const chromium = require('chrome-aws-lambda');
 const hljs = require('highlight.js');
 const rateLimit = require('express-rate-limit');
 const compression = require('compression');
@@ -22,6 +20,20 @@ app.use('/image', rateLimit({
   max: 100,
   message: { error: 'Too many requests' }
 }));
+
+// Add CORS middleware for Make.com compatibility
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+  
+  // Handle OPTIONS requests (preflight)
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  
+  next();
+});
 
 // Enhanced LinkedIn-optimized themes with more minimal aesthetic
 const themes = {
@@ -164,54 +176,18 @@ const gradients = {
   'flame': 'linear-gradient(135deg, #ff416c, #ff4b2b)'
 };
 
-// Replace the browser promise with a singleton pattern
-let browser = null;
-let browserError = null;
+// Replace the browser handling with our custom launcher
+const { getChromiumBrowser } = require('./chromeLauncher');
 
-// Proper browser management with environment detection
+// Replace your getBrowser function with this simplified version
 async function getBrowser() {
-  // Return existing browser instance if available
   if (browser) return browser;
-  // Throw if we already encountered an error
   if (browserError) throw browserError;
   
   try {
-    // Determine if we're in local or serverless environment
-    const executablePath = await chromium.executablePath;
-    const isLambda = !!process.env.AWS_LAMBDA_FUNCTION_NAME || !!process.env.VERCEL;
-    
-    const launchOptions = {
-      args: chromium.args || [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--no-first-run',
-        '--no-zygote',
-        '--disable-gpu'
-      ],
-      defaultViewport: chromium.defaultViewport || { width: 1400, height: 1400 },
-      executablePath: executablePath,
-      headless: chromium.headless || true,
-      ignoreHTTPSErrors: true
-    };
-
-    // Log launch info for debugging
-    console.log('Launching browser in environment:', isLambda ? 'serverless' : 'local');
-    console.log('Using executable path:', executablePath);
-    
-    browser = await puppeteer.launch(launchOptions);
-    console.log('Browser launched successfully');
-    
-    // Clean up on browser disconnect
-    browser.on('disconnected', () => {
-      console.log('Browser disconnected');
-      browser = null;
-    });
-    
+    browser = await getChromiumBrowser();
     return browser;
   } catch (error) {
-    console.error('Failed to launch browser:', error);
     browserError = error;
     throw error;
   }
@@ -463,6 +439,11 @@ app.post('/image', async (req, res) => {
     console.error('Error:', err.message);
     res.status(500).json({ error: 'Image generation failed' });
   }
+});
+
+// Add a specific endpoint for Make.com testing
+app.get('/test', (req, res) => {
+  res.status(200).json({ status: 'API is working' });
 });
 
 // Update health endpoint and graceful shutdown
