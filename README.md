@@ -13,6 +13,8 @@ The server runs on port 3000 by default.
 
 ## Example Usage
 
+### POST Request
+
 Here's a curl command to generate an image with a beautiful fiery gradient background and a large code block:
 
 ```bash
@@ -29,6 +31,28 @@ curl -X POST http://localhost:3000/image \
     "fileName": "demo.js"
   }' \
   --output code-image.png
+```
+
+### GET Request
+
+You can also use a GET request to generate code images, which is useful for embedding directly in HTML or sharing as URLs:
+
+```bash
+curl -G "http://localhost:3000/image" \
+  --data-urlencode "code=function helloWorld() {\n  console.log('Hello LinkedIn!');\n  return 'Image generated via GET request';\n}" \
+  --data-urlencode "language=javascript" \
+  --data-urlencode "theme=github" \
+  --data-urlencode "background=linkedin" \
+  --data-urlencode "watermark=@akshat_arora7" \
+  --output code-image.png
+```
+
+### Direct Browser URL Example
+
+You can use the API directly in your browser by constructing a URL like this:
+
+```
+http://localhost:3000/image?code=console.log(%22Hello%20LinkedIn!%22)%3B&language=javascript&theme=dracula&background=vivid&watermark=@akshat_arora7
 ```
 
 ## Popular Background Gradients

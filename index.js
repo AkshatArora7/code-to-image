@@ -1,4 +1,5 @@
 const express = require('express');
+const puppeteer = require('puppeteer');
 const hljs = require('highlight.js');
 const rateLimit = require('express-rate-limit');
 const compression = require('compression');
@@ -20,20 +21,6 @@ app.use('/image', rateLimit({
   max: 100,
   message: { error: 'Too many requests' }
 }));
-
-// Add CORS middleware for Make.com compatibility
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
-  
-  // Handle OPTIONS requests (preflight)
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-  
-  next();
-});
 
 // Enhanced LinkedIn-optimized themes with more minimal aesthetic
 const themes = {
@@ -176,67 +163,32 @@ const gradients = {
   'flame': 'linear-gradient(135deg, #ff416c, #ff4b2b)'
 };
 
-// Replace the browser handling with our custom launcher
-const { getChromiumBrowser } = require('./chromeLauncher');
+let browserPromise = puppeteer.launch({
+  headless: 'new',
+  args: ['--no-sandbox', '--disable-setuid-sandbox']
+});
 
-// Replace your getBrowser function with this simplified version
-async function getBrowser() {
-  if (browser) return browser;
-  if (browserError) throw browserError;
-  
-  try {
-    browser = await getChromiumBrowser();
-    return browser;
-  } catch (error) {
-    browserError = error;
-    throw error;
-  }
-}
-
-app.post('/image', async (req, res) => {
-  const { 
-    code, 
-    language = 'javascript', 
-    theme = 'light',
-    fontSize = '16px', 
-    radius = '10px',
-    padding = '24px',
-    containerMargin = '40px',
-    gradientPadding = '60px',
-    gradientOpacity = 1.0,
-    shadow = true,
-    shadowIntensity = 'light',
-    showLineNumbers = true,
-    lineNumbersStyle = 'minimal',
-    showWindowControls = true,
-    showTab = true,
-    fileName = '',
-    title = '',
-    watermark = '@akshat_arora7',
-    background = 'vivid', // Set default to vibrant gradient
-    gradientAngle = '135deg',
-    squareImage = true
-  } = req.body;
-
-  if (!code) return res.status(400).json({ error: 'Code required' });
+// Shared function to generate code images
+async function generateCodeImage(params, res) {
+  if (!params.code) return res.status(400).json({ error: 'Code required' });
 
   // Generate cache key from all parameters
   const key = crypto.createHash('md5')
-    .update(JSON.stringify(req.body))
+    .update(JSON.stringify(params))
     .digest('hex');
     
   const cached = cache.get(key);
   if (cached) return res.type('png').send(cached);
 
   try {
-    const themeColors = themes[theme] || themes.light;
+    const themeColors = themes[params.theme] || themes.light;
     
     // IMPORTANT: Preserve line breaks in code
     // Replace any \r\n with \n for consistent line breaks
-    let formattedCode = code.replace(/\r\n/g, '\n');
+    let formattedCode = params.code.replace(/\r\n/g, '\n');
     
     // If it's JavaScript or TypeScript, ensure consistent formatting
-    if (language === 'javascript' || language === 'typescript') {
+    if (params.language === 'javascript' || params.language === 'typescript') {
       // Preserve line breaks but improve formatting
       const lines = formattedCode.split('\n');
       let indent = 0;
@@ -261,11 +213,11 @@ app.post('/image', async (req, res) => {
     }
     
     // Highlight the code with proper language
-    const highlighted = hljs.highlight(formattedCode, { language, ignoreIllegals: true }).value;
+    const highlighted = hljs.highlight(formattedCode, { language: params.language, ignoreIllegals: true }).value;
     
     // Count lines correctly from formatted code
     const lineCount = formattedCode.split('\n').length;
-    const lineNumbers = showLineNumbers
+    const lineNumbers = params.showLineNumbers
       ? Array.from({ length: lineCount }, (_, i) => i + 1).join('\n')
       : '';
 
@@ -279,23 +231,24 @@ app.post('/image', async (req, res) => {
     // Process background 
     let backgroundStyle = 'transparent';
     
-    if (background !== 'transparent') {
+    if (params.background !== 'transparent') {
       // Check if it's a predefined gradient keyword
-      if (gradients[background]) {
-        backgroundStyle = gradients[background];
+      if (gradients[params.background]) {
+        backgroundStyle = gradients[params.background];
       }
       // Check if it's a custom gradient (Array with 2+ colors)
-      else if (Array.isArray(background) && background.length >= 2) {
-        backgroundStyle = `linear-gradient(${gradientAngle}, ${background.join(', ')})`;
+      else if (Array.isArray(params.background) && params.background.length >= 2) {
+        backgroundStyle = `linear-gradient(${params.gradientAngle}, ${params.background.join(', ')})`;
       }
       // Otherwise use as solid color
       else {
-        backgroundStyle = background;
+        backgroundStyle = params.background;
       }
     }
 
-    // Determine file name to display in the tab (use fileName, fallback to title, or use a default based on language)
-    const displayFileName = fileName || title || `${language === 'javascript' ? 'script' : language}.${getExtensionForLanguage(language)}`;
+    // Determine file name to display in the tab
+    const displayFileName = params.fileName || params.title || 
+      `${params.language === 'javascript' ? 'script' : params.language}.${getExtensionForLanguage(params.language)}`;
     
     // Function to get file extension based on language
     function getExtensionForLanguage(lang) {
@@ -336,30 +289,29 @@ app.post('/image', async (req, res) => {
         <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Poppins:wght@400,500;600&display=swap" rel="stylesheet">
         <style>
           html, body { margin: 0; padding: 0; width: 100%; height: 100%; box-sizing: border-box; }
-          body { display: flex; justify-content: center; align-items: center; background: ${backgroundStyle}; font-family: 'Poppins', sans-serif; padding: ${squareImage ? '50px' : gradientPadding}; }
-          .gradient-wrapper { padding: ${containerMargin}; border-radius: ${radius}; display: flex; justify-content: center; align-items: center; width: ${squareImage ? 'auto' : '100%'}; aspect-ratio: ${squareImage ? '1/1' : 'auto'}; opacity: ${gradientOpacity}; }
+          body { display: flex; justify-content: center; align-items: center; background: ${backgroundStyle}; font-family: 'Poppins', sans-serif; padding: ${params.squareImage ? '50px' : params.gradientPadding}; }
+          .gradient-wrapper { padding: ${params.containerMargin}; border-radius: ${params.radius}; display: flex; justify-content: center; align-items: center; width: ${params.squareImage ? 'auto' : '100%'}; aspect-ratio: ${params.squareImage ? '1/1' : 'auto'}; opacity: ${params.gradientOpacity}; }
           
-          /* --- FIX: Added position: relative --- */
-          .container { position: relative; border-radius: ${radius}; ${shadow ? `box-shadow: ${shadowStyle[shadowIntensity] || shadowStyle.light};` : ''} overflow: hidden; max-width: 850px; width: 100%; background: ${themeColors.bg}; }
+          .container { position: relative; border-radius: ${params.radius}; ${params.shadow ? `box-shadow: ${shadowStyle[params.shadowIntensity] || shadowStyle.light};` : ''} overflow: hidden; max-width: 850px; width: 100%; background: ${themeColors.bg}; }
           
-          .header { display: flex; align-items: center; background: ${themeColors.windowBg}; height: ${showTab || showWindowControls ? '42px' : '0'}; padding: 0; border-radius: ${radius} ${radius} 0 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
-          .window-controls-container { display: ${showWindowControls ? 'flex' : 'none'}; align-items: center; padding: 0 16px; }
+          .header { display: flex; align-items: center; background: ${themeColors.windowBg}; height: ${params.showTab || params.showWindowControls ? '42px' : '0'}; padding: 0; border-radius: ${params.radius} ${params.radius} 0 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
+          .window-controls-container { display: ${params.showWindowControls ? 'flex' : 'none'}; align-items: center; padding: 0 16px; }
           .window-controls { display: flex; gap: 8px; }
           .window-control { width: 12px; height: 12px; border-radius: 50%; }
           .window-control.close { background-color: #ff5f56; }
           .window-control.minimize { background-color: #ffbd2e; }
           .window-control.maximize { background-color: #27c93f; }
           .tabs { display: flex; flex-grow: 1; height: 100%; padding-left: 10px; }
-          .tab { display: ${showTab ? 'flex' : 'none'}; align-items: center; padding: 0 16px; height: 100%; background: ${themeColors.bg}; border-top-left-radius: 5px; border-top-right-radius: 5px; position: relative; }
+          .tab { display: ${params.showTab ? 'flex' : 'none'}; align-items: center; padding: 0 16px; height: 100%; background: ${themeColors.bg}; border-top-left-radius: 5px; border-top-right-radius: 5px; position: relative; }
           .tab::after { content: ''; position: absolute; bottom: -1px; left: 0; right: 0; height: 1px; background: ${themeColors.bg}; z-index: 2; }
           .tab-icon { margin-right: 8px; }
           .tab-name { font-size: 13px; font-weight: 500; color: ${themeColors.fg}; white-space: nowrap; }
           .window-title { margin-left: auto; font-size: 13px; color: ${themeColors.comment}; padding: 0 16px; }
 
-          .code-container { display: flex; background: ${themeColors.bg}; padding: ${padding} 0; }
-          .line-numbers, .code-content pre code { font-family: 'Fira Code', monospace; font-size: ${fontSize}; line-height: 1.8; white-space: pre; tab-size: 2; -moz-tab-size: 2; }
-          .line-numbers { text-align: right; user-select: none; padding-left: ${padding}; padding-right: 12px; color: ${themeColors.comment}; opacity: 0.7; border-right: 1px solid rgba(255, 255, 255, 0.1); }
-          .code-content { overflow-x: auto; flex-grow: 1; padding-left: 16px; padding-right: ${padding}; }
+          .code-container { display: flex; background: ${themeColors.bg}; padding: ${params.padding} 0; }
+          .line-numbers, .code-content pre code { font-family: 'Fira Code', monospace; font-size: ${params.fontSize}; line-height: 1.8; white-space: pre; tab-size: 2; -moz-tab-size: 2; }
+          .line-numbers { text-align: right; user-select: none; padding-left: ${params.padding}; padding-right: 12px; color: ${themeColors.comment}; opacity: 0.7; border-right: 1px solid rgba(255, 255, 255, 0.1); }
+          .code-content { overflow-x: auto; flex-grow: 1; padding-left: 16px; padding-right: ${params.padding}; }
           pre { margin: 0; padding: 0; }
           .code-content pre code { color: ${themeColors.fg}; background: transparent; padding: 0; display: block; }
           
@@ -370,7 +322,6 @@ app.post('/image', async (req, res) => {
           .hljs-comment, .hljs-meta { color: ${themeColors.comment}; font-style: italic; }
           .hljs-property { color: ${themeColors.property}; }
 
-          /* --- FIX: Watermark CSS Added --- */
           .watermark {
             font-family: 'Poppins', sans-serif;
             position: absolute;
@@ -378,7 +329,7 @@ app.post('/image', async (req, res) => {
             right: 15px;
             font-size: 12px;
             font-weight: 500;
-            color: ${themeColors.comment}; /* Dynamic color */
+            color: ${themeColors.comment};
             opacity: 0.8;
             z-index: 10;
           }
@@ -388,68 +339,177 @@ app.post('/image', async (req, res) => {
           <div class="container">
             <div class="header">
               <div class="window-controls-container"><div class="window-controls"><div class="window-control close"></div><div class="window-control minimize"></div><div class="window-control maximize"></div></div></div>
-              <div class="tabs">${showTab ? `<div class="tab"><div class="tab-icon">${getLanguageIcon(language)}</div><span class="tab-name">${displayFileName}</span></div>` : ''}</div>
-              ${title ? `<div class="window-title">${title}</div>` : ''}
+              <div class="tabs">${params.showTab ? `<div class="tab"><div class="tab-icon">${getLanguageIcon(params.language)}</div><span class="tab-name">${displayFileName}</span></div>` : ''}</div>
+              ${params.title ? `<div class="window-title">${params.title}</div>` : ''}
             </div>
             <div class="code-container">
-              ${showLineNumbers ? `<pre class="line-numbers"><code>${lineNumbers}</code></pre>` : ''}
+              ${params.showLineNumbers ? `<pre class="line-numbers"><code>${lineNumbers}</code></pre>` : ''}
               <div class="code-content">
                 <pre><code class="hljs">${highlighted}</code></pre>
               </div>
             </div>
-            <!-- FIX: Watermark moved inside .container -->
-            ${watermark ? `<div class="watermark">${watermark}</div>` : ''}
+            ${params.watermark ? `<div class="watermark">${params.watermark}</div>` : ''}
           </div>
         </div>
       </body></html>
     `;
 
-    try {
-      // Get browser instance with error handling
-      const browser = await getBrowser();
-      const page = await browser.newPage();
-      
-      // LinkedIn recommended image size
-      await page.setViewport({
-        width: 1200,
-        height: 630,
-        deviceScaleFactor: 2
-      });
-      
-      await page.setContent(html, { waitUntil: 'networkidle0' });
-      
-      const element = await page.$('.gradient-wrapper');
-      const image = await element.screenshot({
-        omitBackground: false,
-        encoding: 'binary'
-      });
-      
-      await page.close();
-      
-      cache.set(key, image);
-      res.type('png').send(image);
-    } catch (browserError) {
-      console.error('Browser error:', browserError);
-      res.status(500).json({ 
-        error: 'Image generation failed', 
-        message: 'Browser error: ' + browserError.message 
-      });
-    }
+    const browser = await browserPromise;
+    const page = await browser.newPage();
+
+    await page.setViewport({
+      width: 1400,
+      height: 1400,
+      deviceScaleFactor: 2
+    });
+
+    await page.setContent(html, { waitUntil: 'networkidle0' });
+
+    const element = await page.$('.gradient-wrapper');
+    const image = await element.screenshot({
+      omitBackground: false,
+      encoding: 'binary'
+    });
+
+    await page.close();
+
+    cache.set(key, image);
+    res.type('png').send(image);
   } catch (err) {
     console.error('Error:', err.message);
     res.status(500).json({ error: 'Image generation failed' });
   }
+}
+
+// Add GET endpoint for code image generation
+app.get('/image', async (req, res) => {
+  try {
+    // Get parameters from query string
+    const { 
+      code, 
+      language = 'javascript', 
+      theme = 'light',
+      fontSize = '16px', 
+      radius = '10px',
+      padding = '24px',
+      containerMargin = '40px',
+      gradientPadding = '60px',
+      gradientOpacity = 1.0,
+      shadow = true,
+      shadowIntensity = 'light',
+      showLineNumbers = true,
+      lineNumbersStyle = 'minimal',
+      showWindowControls = true,
+      showTab = true,
+      fileName = '',
+      title = '',
+      watermark = '@akshat_arora7',
+      background = 'vivid',
+      gradientAngle = '135deg',
+      squareImage = true
+    } = req.query;
+
+    // Handle boolean parameters correctly (convert string "true"/"false" to actual booleans)
+    const parseBoolean = (value) => {
+      if (value === 'false') return false;
+      if (value === 'true') return true;
+      return value === '' ? true : !!value;
+    };
+
+    // Handle numeric parameters (convert string to number)
+    const parseNumber = (value) => {
+      return !isNaN(parseFloat(value)) ? parseFloat(value) : value;
+    };
+
+    // Process parameters
+    const params = {
+      code: code ? decodeURIComponent(code) : null,
+      language,
+      theme,
+      fontSize,
+      radius,
+      padding,
+      containerMargin,
+      gradientPadding,
+      gradientOpacity: parseNumber(gradientOpacity),
+      shadow: parseBoolean(shadow),
+      shadowIntensity,
+      showLineNumbers: parseBoolean(showLineNumbers),
+      lineNumbersStyle,
+      showWindowControls: parseBoolean(showWindowControls),
+      showTab: parseBoolean(showTab),
+      fileName,
+      title,
+      watermark,
+      background,
+      gradientAngle,
+      squareImage: parseBoolean(squareImage)
+    };
+
+    // Use the shared function to generate image
+    await generateCodeImage(params, res);
+  } catch (err) {
+    console.error('Error in GET endpoint:', err.message);
+    res.status(500).json({ error: 'Image generation failed' });
+  }
 });
 
-// Add a specific endpoint for Make.com testing
-app.get('/test', (req, res) => {
-  res.status(200).json({ status: 'API is working' });
+// POST endpoint for code image generation
+app.post('/image', async (req, res) => {
+  const { 
+    code, 
+    language = 'javascript', 
+    theme = 'light',
+    fontSize = '16px', 
+    radius = '10px',
+    padding = '24px',
+    containerMargin = '40px',
+    gradientPadding = '60px',
+    gradientOpacity = 1.0,
+    shadow = true,
+    shadowIntensity = 'light',
+    showLineNumbers = true,
+    lineNumbersStyle = 'minimal',
+    showWindowControls = true,
+    showTab = true,
+    fileName = '',
+    title = '',
+    watermark = '@akshat_arora7',
+    background = 'vivid',
+    gradientAngle = '135deg',
+    squareImage = true
+  } = req.body;
+
+  // Use the shared function with parameters from POST body
+  await generateCodeImage({
+    code,
+    language,
+    theme,
+    fontSize,
+    radius,
+    padding,
+    containerMargin,
+    gradientPadding,
+    gradientOpacity,
+    shadow,
+    shadowIntensity,
+    showLineNumbers,
+    lineNumbersStyle,
+    showWindowControls,
+    showTab,
+    fileName,
+    title,
+    watermark,
+    background,
+    gradientAngle,
+    squareImage
+  }, res);
 });
 
-// Update health endpoint and graceful shutdown
+// Health endpoint and graceful shutdown
 app.get('/health', (_req, res) => res.send('OK'));
 process.on('SIGINT', async () => {
-  if (browser) await browser.close();
+  (await browserPromise).close();
   process.exit();
 });
 
