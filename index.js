@@ -1,5 +1,6 @@
 const express = require('express');
-const puppeteer = require('puppeteer');
+const puppeteer = require('puppeteer-core');
+const chromium = require('chrome-aws-lambda');
 const hljs = require('highlight.js');
 const rateLimit = require('express-rate-limit');
 const compression = require('compression');
@@ -163,10 +164,15 @@ const gradients = {
   'flame': 'linear-gradient(135deg, #ff416c, #ff4b2b)'
 };
 
-let browserPromise = puppeteer.launch({
-  headless: 'new',
-  args: ['--no-sandbox', '--disable-setuid-sandbox']
-});
+let browserPromise = (async () => {
+  return puppeteer.launch({
+    args: chromium.args,
+    defaultViewport: chromium.defaultViewport,
+    executablePath: await chromium.executablePath,
+    headless: chromium.headless,
+    ignoreHTTPSErrors: true,
+  });
+})();
 
 app.post('/image', async (req, res) => {
   const { 

@@ -16,6 +16,7 @@
     "highlight.js": "^11.11.1",
     "helmet": "^7.0.0",
     "node-cache": "^5.1.2",
-    "puppeteer": "^24.10.2"
+    "puppeteer-core": "^24.10.2",
+    "chrome-aws-lambda": "^10.1.0"
   }
 }
